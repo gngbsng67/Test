@@ -1,1 +1,43 @@
-https://links.lootlabs.gg/s?QXdKuPBJ&data=KOwrPpBuKMu%2F69TxkF68O6EEuzFZFUvxfjYw85vJMT9l%2B4S3h7Mo%2BWE8ShrL%2B2k2E0f4hs3rqG0bbou9KDWDDTYUh3%2FKmT3vALdPwtk%2BGp6tzdGGIGWQgoZzfsVjXiExf%2BAEhlTeNpIbVjiPdR8hontT3rDgIFSCffOLEojkzetyXOiwhQA4vBvmyQ7BbfZnnv7ypRtydbNlqH%2F%2BVT7icGGPzR1Y9Eki3P8IJdN7fefXmwZETqW3ta3rjCZeMIK7KgZpg%2BcoyvrPjU6o90TEZT0G34fWE0%2BBqeIGhmlgKacq1q6%2BP7mhk5DT4HayLK1DLkyb3ZgHYfLjjsSzzRbtXG6JA7FfIhelDunVr728azukqnCPUVsCXyzntdC1hoDwxfL47JxFC0RA69S22%2BbmFQ2ulhNUPOAdRTqQAM%2FTV2M57bWlQA5D%2FwxG4sQPtdwr%2F9Hy2%2Bt0njEvlxQqk2%2BaAlmrorFd%2BQRGChK9831u3G8vnhl%2BnQaPVA0q%2FUoEOeFVPVBhSH%2FN1KyLk5trqC%2BeW418QK33qLI4OsTKMGN7n67lrX7%2B1e8oNDr7sIpEJog2f7kYMNBZaJcN%2Fy7LBvgE8VcDK7wGnbt5Jzym941UQfWyEZg3SJKZwhu2GCwSDeCaTAOf71%2BBnoYXy%2B%2F1vV4n9Xqxv7adkNTmjLNlZmFXRBD0Re3HZvScKjMxgujdkWjZ5zeXTJHMxRh9V%2FZGjqpGvs12%2Fq9CNVJeSmef5UMPxYZe1o8CRbdjnb0HnYijI29R
+
+(function() {
+    // 1. Get the WebGL context from the Unity canvas
+    const canvas = document.querySelector("#unity-canvas") || document.querySelector("canvas");
+    const gl = canvas.getContext("webgl2") || canvas.getContext("webgl");
+
+    if (!gl) {
+        console.error("WebGL context not found!");
+        return;
+    }
+
+    const originalDrawElements = gl.drawElements;
+
+    // Set of index counts that belong to the character models 
+    // (You determine these by logging 'count' and seeing which ones disappear/appear with bots)
+    const targetMeshCounts = new Set([/* e.g., 1420, 3128 */]);
+
+    // Optional: Log counts to find the model's signature
+    let logDrawCalls = false;
+
+    gl.drawElements = function(mode, count, type, offset) {
+        if (logDrawCalls) {
+            console.log("DrawElements count:", count);
+        }
+
+        // If this draw call matches a character mesh
+        if (targetMeshCounts.has(count)) {
+            // Disable depth test so it renders through walls
+            gl.disable(gl.DEPTH_TEST);
+
+            // Execute draw call (visible through geometry)
+            originalDrawElements.apply(this, arguments);
+
+            // Re-enable depth test for the rest of the scene
+            gl.enable(gl.DEPTH_TEST);
+            return;
+        }
+
+        return originalDrawElements.apply(this, arguments);
+    };
+
+    console.log("WebGL hook active. Inspect draw calls or populate targetMeshCounts.");
+})();

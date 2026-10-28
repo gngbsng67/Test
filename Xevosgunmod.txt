@@ -1,0 +1,942 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local SoundService = game:GetService("SoundService")
+local ContentProvider = game:GetService("ContentProvider")
+local Lighting = game:GetService("Lighting")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local LocalPlayer = Players.LocalPlayer
+if not LocalPlayer then return end
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+local CONFIG = {
+    SoundId = "rbxassetid://138781122039563",
+    SoundVolume = 1,
+    SoundSpeed = 0.75,
+    SoundPlayTime = 3.0,
+    SoundFadeTime = 1.5,
+    SoundLoadTimeout = 6,
+    PlaySoundOnRespawn = false,
+
+    DiscordLink = "https://discord.gg/VEdm3csd3T",
+
+    LogoImage = "rbxthumb://type=Asset&id=104888900703490&w=420&h=420",
+    CapeColor = Color3.fromRGB(14, 14, 18),
+    CapeWidth = 1.95,
+    CapeHeight = 3.45,
+
+    ShineSweepTime = 1.6,
+    ShineGapTime = 2.0,
+    ShinePauseTime = 2.0,
+    ShinePeakTransparency = 0.35,
+    ShineReversePeakTransparency = 0.5,
+
+    FloorShadow = true,
+    ShadowOpacity = 0.55,
+    ShadowSunInfluence = 0.6,
+    ShadowMinLength = 1.0,
+    FloorReflection = false,
+    FloorFadeHeight = 18,
+    FloorMaxDistance = 60,
+
+    XevosEnabled = true,
+    FireRate = math.huge,
+    Burst = 22,
+    Delay = 0,
+    Speed = 999999,
+    ScanInterval = 0.35,
+}
+
+_G.Xevos_Enabled = CONFIG.XevosEnabled
+_G.Xevos_FireRate = CONFIG.FireRate
+_G.Xevos_Burst = CONFIG.Burst
+
+if _G.XevosCapeCleanup then
+    pcall(_G.XevosCapeCleanup)
+end
+
+local alive = true
+local connections = {}
+local activeSounds = {}
+local setupId = 0
+local activeFxFolder = nil
+
+local isSettingUpCape = false
+local lastCapeSetup = 0
+local isDying = false
+
+local function destroyActiveFx()
+    if activeFxFolder then
+        pcall(function() activeFxFolder:Destroy() end)
+        activeFxFolder = nil
+    end
+end
+
+local function track(connection)
+    table.insert(connections, connection)
+    return connection
+end
+
+local function destroyCapeFrom(character)
+    if not character then return end
+    for _, descendant in ipairs(character:GetDescendants()) do
+        if descendant.Name == "XevosCustomCape" or descendant.Name == "CapeMotor" then
+            pcall(function() descendant:Destroy() end)
+        end
+    end
+end
+
+local function destroyWatermark()
+    local old = PlayerGui:FindFirstChild("XevosWatermarkUI")
+    if old then
+        pcall(function() old:Destroy() end)
+    end
+end
+
+_G.XevosCapeCleanup = function()
+    alive = false
+    for _, connection in ipairs(connections) do
+        pcall(function() connection:Disconnect() end)
+    end
+    table.clear(connections)
+    for _, sound in ipairs(activeSounds) do
+        pcall(function() sound:Destroy() end)
+    end
+    table.clear(activeSounds)
+    destroyCapeFrom(LocalPlayer.Character)
+    destroyActiveFx()
+    destroyWatermark()
+end
+
+local function showDiscordWatermark()
+    destroyWatermark()
+
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "XevosWatermarkUI"
+    screenGui.ResetOnSpawn = false
+    screenGui.IgnoreGuiInset = true
+    screenGui.DisplayOrder = 99999
+    screenGui.Parent = PlayerGui
+
+    local textLabel = Instance.new("TextLabel")
+    textLabel.Name = "LinkText"
+    textLabel.AnchorPoint = Vector2.new(0.5, 0)
+    textLabel.Position = UDim2.new(0.5, 0, 0, 56) -- Placed directly below the top round/timer bar
+    textLabel.Size = UDim2.new(0, 320, 0, 22)
+    textLabel.BackgroundTransparency = 1
+    textLabel.Font = Enum.Font.SourceSans
+    textLabel.Text = CONFIG.DiscordLink
+    textLabel.TextColor3 = Color3.fromRGB(245, 248, 255)
+    textLabel.TextSize = 15
+    textLabel.TextTransparency = 1
+    textLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    textLabel.TextStrokeTransparency = 1
+    textLabel.Parent = screenGui
+
+    task.spawn(function()
+        local tweenIn = TweenInfo.new(0.6, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+        TweenService:Create(textLabel, tweenIn, {TextTransparency = 0, TextStrokeTransparency = 0.4}):Play()
+    end)
+end
+
+local function playIntroSound()
+    task.spawn(function()
+        local ok, err = pcall(function()
+            local sound = Instance.new("Sound")
+            sound.Name = "XevosIntroSound"
+            sound.SoundId = CONFIG.SoundId
+            sound.Volume = CONFIG.SoundVolume
+            sound.PlaybackSpeed = CONFIG.SoundSpeed
+            sound.Looped = false
+            sound.Parent = SoundService
+            table.insert(activeSounds, sound)
+
+            local function finish()
+                local index = table.find(activeSounds, sound)
+                if index then table.remove(activeSounds, index) end
+                pcall(function() sound:Destroy() end)
+            end
+
+            if not sound.IsLoaded then
+                pcall(function() ContentProvider:PreloadAsync({sound}) end)
+                local waited = 0
+                while alive and not sound.IsLoaded and waited < CONFIG.SoundLoadTimeout do
+                    task.wait(0.1)
+                    waited += 0.1
+                end
+            end
+
+            if not alive then
+                finish()
+                return
+            end
+
+            if not sound.IsLoaded then
+                warn("[Xevos] Intro sound did not load: " .. CONFIG.SoundId)
+                finish()
+                return
+            end
+
+            sound:Play()
+            task.wait(CONFIG.SoundPlayTime)
+
+            if alive and sound.Parent then
+                TweenService:Create(
+                    sound,
+                    TweenInfo.new(CONFIG.SoundFadeTime, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
+                    {Volume = 0}
+                ):Play()
+                task.wait(CONFIG.SoundFadeTime)
+            end
+
+            finish()
+        end)
+
+        if not ok then
+            warn("[Xevos] Intro sound error: " .. tostring(err))
+        end
+    end)
+end
+
+local GameSettings = UserSettings():GetService("UserGameSettings")
+
+local function isShiftLocked()
+    return GameSettings.RotationType == Enum.RotationType.CameraRelative
+        or UserInputService.MouseBehavior == Enum.MouseBehavior.LockCenter
+end
+
+local GAUSSIAN_SHADOW_LAYERS = {
+    {scale = 1.00, density = 0.06},
+    {scale = 0.88, density = 0.09},
+    {scale = 0.76, density = 0.13},
+    {scale = 0.64, density = 0.18},
+    {scale = 0.52, density = 0.25},
+    {scale = 0.40, density = 0.35},
+    {scale = 0.30, density = 0.48},
+    {scale = 0.20, density = 0.65},
+    {scale = 0.10, density = 0.90},
+}
+
+local function createAdvancedBlob(name, parent, color, material)
+    local layers = {}
+    for index = 1, #GAUSSIAN_SHADOW_LAYERS do
+        local part = Instance.new("Part")
+        part.Name = name .. index
+        part.Shape = Enum.PartType.Cylinder
+        part.Anchored = true
+        part.CanCollide = false
+        part.CanTouch = false
+        part.CanQuery = false
+        part.CastShadow = false
+        part.Color = color
+        part.Material = material
+        part.Transparency = 1
+        part.Size = Vector3.new(0.04, 1, 1)
+        part.Parent = parent
+        layers[index] = part
+    end
+    return layers
+end
+
+local function updateAdvancedBlob(layers, cf, width, length, opacity, lift)
+    opacity = math.clamp(opacity, 0, 0.98)
+    for index, part in ipairs(layers) do
+        local layerData = GAUSSIAN_SHADOW_LAYERS[index]
+        local scale = layerData.scale
+        local layerOpacity = opacity * layerData.density
+
+        part.Size = Vector3.new(0.04, math.max(width * scale, 0.04), math.max(length * scale, 0.04))
+        part.CFrame = cf + cf.XVector * (lift + index * 0.0035)
+        part.Transparency = 1 - math.clamp(layerOpacity, 0, 0.98)
+    end
+end
+
+local function setupCharacterCape(character)
+    if isSettingUpCape or os.clock() - lastCapeSetup < 0.35 then return end
+    isSettingUpCape = true
+    lastCapeSetup = os.clock()
+
+    setupId += 1
+    local myId = setupId
+
+    task.spawn(function()
+        local humanoid = character:WaitForChild("Humanoid", 8)
+        local rootPart = character:WaitForChild("HumanoidRootPart", 8)
+        if not humanoid or not rootPart then 
+            isSettingUpCape = false 
+            return 
+        end
+
+        local isR15 = humanoid.RigType == Enum.HumanoidRigType.R15
+        local torso = character:WaitForChild(isR15 and "UpperTorso" or "Torso", 8)
+        if not torso then 
+            isSettingUpCape = false 
+            return 
+        end
+
+        local function stale()
+            return not alive or myId ~= setupId or not character:IsDescendantOf(game)
+        end
+
+        task.wait(0.15)
+        if stale() or humanoid.Health <= 0 then 
+            isSettingUpCape = false 
+            return 
+        end
+
+        destroyCapeFrom(character)
+
+        local cape = Instance.new("Part")
+        cape.Name = "XevosCustomCape"
+        cape.Size = Vector3.new(CONFIG.CapeWidth, CONFIG.CapeHeight, 0.06)
+        cape.Color = Color3.fromRGB(245, 252, 255)
+        cape.Material = Enum.Material.Neon
+        cape.Transparency = 0.2
+        cape.CanCollide = false
+        cape.CanTouch = false
+        cape.CanQuery = false
+        cape.Massless = true
+
+        local torsoHalf = torso.Size / 2
+        local attachY = isR15 and 0.65 or 0.92
+        local baseC0 = CFrame.new(0, attachY, torsoHalf.Z + 0.04)
+        local baseC1 = CFrame.new(0, CONFIG.CapeHeight / 2, 0)
+        local baseC1Inv = baseC1:Inverse()
+
+        local capeSize = cape.Size
+        local samplePoints = {}
+        local sampleColumns = {-0.5, -0.25, 0, 0.25, 0.5}
+        local sampleRows = {0, 0.08, 0.2, 0.4, 1}
+        for _, cx in ipairs(sampleColumns) do
+            for _, ry in ipairs(sampleRows) do
+                table.insert(samplePoints, Vector3.new(
+                    cx * capeSize.X,
+                    capeSize.Y / 2 - ry * capeSize.Y,
+                    -capeSize.Z / 2
+                ))
+            end
+        end
+
+        local function computePush(c0)
+            local capeInTorso = c0 * baseC1Inv
+            local limitZ = torsoHalf.Z + 0.005
+            local maxX = torsoHalf.X + 0.05
+            local maxY = torsoHalf.Y
+            local deepest = 0
+            for _, p in ipairs(samplePoints) do
+                local v = capeInTorso * p
+                if v.Z < limitZ and math.abs(v.X) <= maxX and v.Y <= maxY then
+                    local penetration = limitZ - v.Z
+                    if penetration > deepest then
+                        deepest = penetration
+                    end
+                end
+            end
+            return deepest
+        end
+
+        local motor = Instance.new("Motor6D")
+        motor.Name = "CapeMotor"
+        motor.Part0 = torso
+        motor.Part1 = cape
+        motor.C0 = baseC0
+        motor.C1 = baseC1
+        motor.Parent = torso
+
+        local surfaceGui = Instance.new("SurfaceGui")
+        surfaceGui.Name = "CapeShineGui"
+        surfaceGui.Face = Enum.NormalId.Back
+        surfaceGui.AlwaysOnTop = false
+        surfaceGui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+        surfaceGui.PixelsPerStud = 50
+        surfaceGui.LightInfluence = 0.25
+        surfaceGui.Parent = cape
+
+        local container = Instance.new("Frame")
+        container.Size = UDim2.new(1, 0, 1, 0)
+        container.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+        container.BackgroundTransparency = 1
+        container.BorderSizePixel = 0
+        container.ClipsDescendants = true
+        container.Parent = surfaceGui
+
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 10)
+        corner.Parent = container
+
+        local logoImg = Instance.new("ImageLabel")
+        logoImg.Size = UDim2.new(0.85, 0, 0.85, 0)
+        logoImg.Position = UDim2.new(0.5, 0, 0.5, 0)
+        logoImg.AnchorPoint = Vector2.new(0.5, 0.5)
+        logoImg.BackgroundTransparency = 1
+        logoImg.Image = CONFIG.LogoImage
+        logoImg.ImageTransparency = 1
+        logoImg.ScaleType = Enum.ScaleType.Fit
+        logoImg.ZIndex = 2
+        logoImg.Parent = container
+
+        local shineOverlay = Instance.new("Frame")
+        shineOverlay.Size = UDim2.new(1, 0, 1, 0)
+        shineOverlay.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        shineOverlay.BackgroundTransparency = 1
+        shineOverlay.BorderSizePixel = 0
+        shineOverlay.ZIndex = 3
+        shineOverlay.Parent = container
+
+        local shineCorner = Instance.new("UICorner")
+        shineCorner.CornerRadius = UDim.new(0, 10)
+        shineCorner.Parent = shineOverlay
+
+        local shineGrad = Instance.new("UIGradient")
+        shineGrad.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
+            ColorSequenceKeypoint.new(0.5, Color3.fromRGB(220, 245, 255)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 255, 255)),
+        })
+        shineGrad.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 1),
+            NumberSequenceKeypoint.new(0.42, 1),
+            NumberSequenceKeypoint.new(0.5, 0.35),
+            NumberSequenceKeypoint.new(0.58, 1),
+            NumberSequenceKeypoint.new(1, 1),
+        })
+        shineGrad.Rotation = 35
+        shineGrad.Offset = Vector2.new(-1.2, 0)
+        shineGrad.Parent = shineOverlay
+
+        cape.Parent = character
+        isSettingUpCape = false
+
+        task.spawn(function()
+            local flareInTween = TweenService:Create(
+                cape,
+                TweenInfo.new(0.55, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
+                {Color = CONFIG.CapeColor, Transparency = 0}
+            )
+            flareInTween:Play()
+            TweenService:Create(container, TweenInfo.new(0.5, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {BackgroundTransparency = 0}):Play()
+            TweenService:Create(logoImg, TweenInfo.new(0.55, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {ImageTransparency = 0}):Play()
+            
+            task.wait(0.55)
+            if cape and cape.Parent then
+                cape.Material = Enum.Material.SmoothPlastic
+            end
+        end)
+
+        local function shineSequence(peak)
+            return NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 1),
+                NumberSequenceKeypoint.new(0.42, 1),
+                NumberSequenceKeypoint.new(0.5, peak),
+                NumberSequenceKeypoint.new(0.58, 1),
+                NumberSequenceKeypoint.new(1, 1),
+            })
+        end
+
+        local shineSteps = {
+            {
+                from = Vector2.new(-1.2, 0),
+                to = Vector2.new(1.2, 0),
+                peak = CONFIG.ShinePeakTransparency,
+                rest = CONFIG.ShineGapTime,
+            },
+            {
+                from = Vector2.new(1.2, 0),
+                to = Vector2.new(-1.2, 0),
+                peak = CONFIG.ShineReversePeakTransparency,
+                rest = CONFIG.ShinePauseTime,
+            },
+        }
+
+        task.spawn(function()
+            shineGrad.Rotation = 35
+            local step = 1
+            while not stale() and cape.Parent do
+                local current = shineSteps[step]
+                shineOverlay.BackgroundTransparency = 0
+                shineGrad.Transparency = shineSequence(current.peak)
+                shineGrad.Offset = current.from
+                TweenService:Create(
+                    shineGrad,
+                    TweenInfo.new(CONFIG.ShineSweepTime, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
+                    {Offset = current.to}
+                ):Play()
+                task.wait(CONFIG.ShineSweepTime)
+                shineOverlay.BackgroundTransparency = 1
+                task.wait(current.rest)
+                step = step % #shineSteps + 1
+            end
+        end)
+
+        local function noop() end
+        local updateFloorFx, destroyFloorFx = noop, noop
+
+        if CONFIG.FloorShadow then
+            destroyActiveFx()
+
+            local fxFolder = Instance.new("Folder")
+            fxFolder.Name = "XevosCapeFloorFx"
+            fxFolder.Parent = workspace
+            activeFxFolder = fxFolder
+
+            local shadowLayers = createAdvancedBlob("Shadow", fxFolder, Color3.fromRGB(8, 8, 12), Enum.Material.SmoothPlastic)
+
+            local rayParams = RaycastParams.new()
+            rayParams.FilterType = Enum.RaycastFilterType.Exclude
+            rayParams.FilterDescendantsInstances = {character, fxFolder}
+            rayParams.IgnoreWater = true
+            rayParams.RespectCanCollide = true
+
+            local standHeight = isR15 and (humanoid.HipHeight + rootPart.Size.Y / 2) or 3
+
+            local fxReady = false
+            local fxCF = CFrame.new()
+            local fxWidth, fxLength = 1, 1
+            local fxShadow = 0
+
+            destroyFloorFx = function()
+                pcall(function() fxFolder:Destroy() end)
+                if activeFxFolder == fxFolder then
+                    activeFxFolder = nil
+                end
+            end
+
+            updateFloorFx = function(dt, capeCF)
+                local rootPos = rootPart.Position
+                local hit = workspace:Raycast(rootPos, Vector3.new(0, -CONFIG.FloorMaxDistance, 0), rayParams)
+
+                local targetShadow = 0
+                local targetCF, targetWidth, targetLength = fxCF, fxWidth, fxLength
+                local haveTarget = false
+
+                if hit then
+                    local normal = hit.Normal
+                    local floorPos = hit.Position
+
+                    local height = (rootPos - floorPos):Dot(normal)
+                    local air = math.max(height - standHeight, 0)
+                    local fade = 1 - math.clamp(air / CONFIG.FloorFadeHeight, 0, 1)
+                    fade = fade * fade
+
+                    local penumbraSpread = 1 + air * 0.16
+                    local coreDiffusion = 1 / (1 + air * 0.14)
+
+                    local lightDir = -normal
+                    if CONFIG.ShadowSunInfluence > 0 then
+                        local sun = Lighting:GetSunDirection()
+                        if sun.Y > 0.05 then
+                            local sunDown = Vector3.new(-sun.X, -math.max(sun.Y, 0.45), -sun.Z).Unit
+                            lightDir = (lightDir * (1 - CONFIG.ShadowSunInfluence) + sunDown * CONFIG.ShadowSunInfluence).Unit
+                        else
+                            lightDir = -normal
+                        end
+                    end
+                    if lightDir:Dot(normal) > -0.2 then
+                        lightDir = -normal
+                    end
+
+                    local function project(point)
+                        local t = (floorPos - point):Dot(normal) / lightDir:Dot(normal)
+                        return point + lightDir * t
+                    end
+
+                    local halfW, halfH = cape.Size.X / 2, cape.Size.Y / 2
+                    local topLeft = project(capeCF * Vector3.new(-halfW, halfH, 0))
+                    local topRight = project(capeCF * Vector3.new(halfW, halfH, 0))
+                    local bottomLeft = project(capeCF * Vector3.new(-halfW, -halfH, 0))
+                    local bottomRight = project(capeCF * Vector3.new(halfW, -halfH, 0))
+                    local center = (topLeft + topRight + bottomLeft + bottomRight) / 4
+
+                    local widthVec = topRight - topLeft
+                    local downVec = (bottomLeft + bottomRight) / 2 - (topLeft + topRight) / 2
+
+                    local across = widthVec - normal * widthVec:Dot(normal)
+                    if across.Magnitude < 0.05 then
+                        local right = rootPart.CFrame.RightVector
+                        across = right - normal * right:Dot(normal)
+                    end
+
+                    if across.Magnitude > 0.001 and center == center then
+                        local widthAxis = across.Unit
+                        local lengthAxis = normal:Cross(widthAxis)
+
+                        local w = math.abs(widthVec:Dot(widthAxis)) + math.abs(downVec:Dot(widthAxis))
+                        local l = math.abs(downVec:Dot(lengthAxis)) + CONFIG.ShadowMinLength
+
+                        targetCF = CFrame.fromMatrix(center, normal, widthAxis, lengthAxis)
+                        targetWidth = w * 1.12 * penumbraSpread
+                        targetLength = l * 1.15 * penumbraSpread
+                        targetShadow = CONFIG.ShadowOpacity * fade * coreDiffusion
+
+                        haveTarget = true
+                    end
+                end
+
+                if haveTarget and not fxReady then
+                    fxCF, fxWidth, fxLength = targetCF, targetWidth, targetLength
+                    fxReady = true
+                elseif haveTarget then
+                    local kMove = 1 - math.exp(-dt * 28)
+                    local kSize = 1 - math.exp(-dt * 16)
+                    fxCF = fxCF:Lerp(targetCF, kMove)
+                    fxWidth = fxWidth + (targetWidth - fxWidth) * kSize
+                    fxLength = fxLength + (targetLength - fxLength) * kSize
+                end
+
+                local kFade = 1 - math.exp(-dt * 10)
+                fxShadow = fxShadow + (targetShadow - fxShadow) * kFade
+
+                if not fxReady then return end
+
+                updateAdvancedBlob(shadowLayers, fxCF, fxWidth, fxLength, fxShadow, 0.03)
+            end
+        end
+
+        local pitchPos, pitchVel = 35, 0
+        local rollPos, rollVel = 0, 0
+        local yawPos, yawVel = 0, 0
+
+        local lockAlpha = 0
+        local smoothTurn = 0
+        local lastLook = rootPart.CFrame.LookVector
+        local pushSmooth = 0
+
+        local animConnection
+        animConnection = RunService.RenderStepped:Connect(function(dt)
+            if stale() or not cape.Parent or not torso.Parent or not rootPart.Parent or humanoid.Health <= 0 then
+                animConnection:Disconnect()
+                destroyFloorFx()
+                return
+            end
+
+            dt = math.clamp(dt, 0.001, 0.05)
+
+            local lockTarget = isShiftLocked() and 1 or 0
+            lockAlpha = lockAlpha + (lockTarget - lockAlpha) * math.clamp(dt * 8, 0, 1)
+
+            local seated = humanoid.Sit
+            local linVel = seated and Vector3.zero or rootPart.AssemblyLinearVelocity
+            local localLinVel = rootPart.CFrame:VectorToObjectSpace(linVel)
+
+            local look = rootPart.CFrame.LookVector
+            local rawTurn = math.atan2(lastLook:Cross(look).Y, lastLook:Dot(look)) / dt
+            lastLook = look
+            if seated or rawTurn ~= rawTurn then rawTurn = 0 end
+            rawTurn = math.clamp(rawTurn, -12, 12)
+
+            local turnResponse = 20 + (7 - 20) * lockAlpha
+            smoothTurn = smoothTurn + (rawTurn - smoothTurn) * math.clamp(dt * turnResponse, 0, 1)
+            local turnSpeed = math.clamp(smoothTurn, -3, 3) * (1 - 0.45 * lockAlpha)
+
+            local forwardSpeed = -localLinVel.Z
+            local verticalSpeed = localLinVel.Y
+            local strafeSpeed = math.clamp(localLinVel.X, -18, 18)
+
+            local backSpeed = math.clamp(-forwardSpeed, 0, 16) * lockAlpha
+            local backFactor = backSpeed / 16
+
+            local totalSpeed = math.min(linVel.Magnitude, 60)
+            local t = os.clock()
+
+            local isFalling = verticalSpeed < -4
+            local fallFactor = math.clamp((-verticalSpeed - 4) / 40, 0, 1)
+
+            local h1 = math.sin(t * (7 + totalSpeed * 0.35)) * (1.1 + totalSpeed * 0.1)
+            local h2 = math.cos(t * (13 + totalSpeed * 0.55)) * (0.7 + totalSpeed * 0.07)
+            local h3 = math.sin(t * (23 + totalSpeed * 0.75)) * (0.35 + totalSpeed * 0.04)
+
+            local fallFlutter = 0
+            if isFalling then
+                local fallFreq = 16 + fallFactor * 16
+                fallFlutter = (math.sin(t * fallFreq) * 3.0 + math.cos(t * (fallFreq * 1.5)) * 1.8) * fallFactor
+            end
+
+            local flutterScale = 1 - 0.55 * backFactor
+
+            local flutterPitch = (h1 + h2 + h3 + fallFlutter) * flutterScale
+            local flutterRoll = math.cos(t * (5 + totalSpeed * 0.3)) * (0.8 + totalSpeed * 0.08)
+            if isFalling then
+                flutterRoll = flutterRoll + math.sin(t * 22) * 1.5 * fallFactor
+            end
+            flutterRoll = flutterRoll * flutterScale
+
+            local baseAngle = 18
+            local runLift = math.clamp(forwardSpeed * 1.5, 0, 26)
+            local fallLift = fallFactor * 38
+            local jumpDrag = math.clamp(-verticalSpeed * 0.75, -8, 0)
+            local strafeLift = math.abs(strafeSpeed) * 0.45 * lockAlpha
+
+            local targetPitch = math.clamp(baseAngle + runLift + fallLift + jumpDrag + strafeLift, 16, 68) + flutterPitch
+
+            local strafeRollGain = 0.9 + 0.5 * lockAlpha
+            local strafeYawGain = 0.4 + 0.3 * lockAlpha
+
+            local targetRoll = math.clamp(-strafeSpeed * strafeRollGain - turnSpeed * 3, -16, 16) + flutterRoll
+            local targetYaw = math.clamp(-turnSpeed * 2.5 - strafeSpeed * strafeYawGain, -8, 8)
+
+            local fP, zP = 14, 0.75
+            local forceP = (targetPitch - pitchPos) * (fP * fP) - (pitchVel * 2 * zP * fP)
+            pitchVel = pitchVel + forceP * dt
+            pitchPos = math.max(16, pitchPos + pitchVel * dt)
+
+            local fR, zR = 15, 0.70
+            local forceR = (targetRoll - rollPos) * (fR * fR) - (rollVel * 2 * zR * fR)
+            rollVel = rollVel + forceR * dt
+            rollPos = math.clamp(rollPos + rollVel * dt, -16, 16)
+
+            local fY, zY = 16, 0.75
+            local forceY = (targetYaw - yawPos) * (fY * fY) - (yawVel * 2 * zY * fY)
+            yawVel = yawVel + forceY * dt
+            yawPos = math.clamp(yawPos + yawVel * dt, -8, 8)
+
+            if pitchPos ~= pitchPos or pitchVel ~= pitchVel
+                or rollPos ~= rollPos or rollVel ~= rollVel
+                or yawPos ~= yawPos or yawVel ~= yawVel then
+                pitchPos, pitchVel = 18, 0
+                rollPos, rollVel = 0, 0
+                yawPos, yawVel = 0, 0
+                pushSmooth = 0
+            end
+
+            local rotatedC0 = baseC0 * CFrame.Angles(-math.rad(pitchPos), math.rad(yawPos), math.rad(rollPos))
+
+            local needed = computePush(rotatedC0)
+            if needed >= pushSmooth then
+                pushSmooth = needed
+            else
+                pushSmooth = pushSmooth + (needed - pushSmooth) * math.clamp(dt * 14, 0, 1)
+                if pushSmooth < 0.001 then
+                    pushSmooth = 0
+                end
+            end
+
+            motor.C0 = CFrame.new(0, 0, pushSmooth) * rotatedC0
+            updateFloorFx(dt, torso.CFrame * motor.C0 * baseC1Inv)
+        end)
+        track(animConnection)
+
+        local diedConn
+        diedConn = humanoid.Died:Connect(function()
+            if diedConn then diedConn:Disconnect() end
+            if animConnection then animConnection:Disconnect() end
+            destroyFloorFx()
+
+            isDying = true
+            task.spawn(function()
+                if cape and cape.Parent then
+                    cape.Material = Enum.Material.Neon
+                    TweenService:Create(cape, TweenInfo.new(0.1, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {Color = Color3.fromRGB(255, 255, 255)}):Play()
+                    TweenService:Create(logoImg, TweenInfo.new(0.2, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {ImageTransparency = 1}):Play()
+                    TweenService:Create(container, TweenInfo.new(0.2, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {BackgroundTransparency = 1}):Play()
+                    
+                    local flareOutTween = TweenService:Create(
+                        cape,
+                        TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                        {Transparency = 1}
+                    )
+                    local liftTween = TweenService:Create(
+                        motor,
+                        TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                        {C0 = baseC0 * CFrame.new(0, 0.6, 0.3) * CFrame.Angles(-math.rad(70), 0, 0)}
+                    )
+                    flareOutTween:Play()
+                    liftTween:Play()
+                    flareOutTween.Completed:Wait()
+                end
+                if cape.Parent then cape:Destroy() end
+                if motor.Parent then motor:Destroy() end
+                isDying = false
+            end)
+        end)
+        track(diedConn)
+    end)
+end
+
+local function ensureCapePersistence()
+    if not alive or isSettingUpCape or isDying then return end
+    local char = LocalPlayer.Character
+    if not char or not char:IsDescendantOf(workspace) then return end
+
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return end
+
+    local isR15 = hum.RigType == Enum.HumanoidRigType.R15
+    local torso = char:FindFirstChild(isR15 and "UpperTorso" or "Torso")
+    local rootPart = char:FindFirstChild("HumanoidRootPart")
+    if not torso or not rootPart then return end
+
+    local existingCape = char:FindFirstChild("XevosCustomCape")
+    local existingMotor = torso:FindFirstChild("CapeMotor")
+
+    if not existingCape or not existingCape.Parent or not existingMotor or not existingMotor.Parent then
+        setupCharacterCape(char)
+    end
+end
+
+local holdingClick = false
+local knifeRemote = nil
+local lastKnifeThrow = 0
+local lastScan = 0
+
+local function locateKnifeRemote()
+    if knifeRemote then return end
+    for _, v in ipairs(ReplicatedStorage:GetDescendants()) do
+        if v:IsA("RemoteEvent") and (v.Name:lower():find("throwstart") or v.Name:lower():find("knife")) then
+            knifeRemote = v
+            break
+        end
+    end
+end
+
+local function applyXevos(tool)
+    if not _G.Xevos_Enabled or not tool or not tool:IsA("Tool") then return end
+
+    for _, v in ipairs(tool:GetDescendants()) do
+        if v:IsA("ValueBase") then
+            local name = v.Name:lower()
+            if name:find("firerate") or name:find("cooldown") or name:find("delay") or name:find("bfirerate") then
+                pcall(function() v.Value = CONFIG.Delay end)
+            elseif name:find("speed") or name:find("velocity") or name:find("bullet") then
+                pcall(function() v.Value = CONFIG.Speed end)
+            end
+        end
+    end
+
+    for attribute, _ in pairs(tool:GetAttributes()) do
+        local name = attribute:lower()
+        if name:find("firerate") or name:find("cooldown") or name:find("delay") then
+            pcall(function() tool:SetAttribute(attribute, CONFIG.Delay) end)
+        elseif name:find("speed") or name:find("velocity") or name:find("bullet") then
+            pcall(function() tool:SetAttribute(attribute, CONFIG.Speed) end)
+        end
+    end
+end
+
+local function applyGC()
+    if not getgc then return end
+    pcall(function()
+        for _, v in ipairs(getgc(true)) do
+            if type(v) == "table" then
+                if rawget(v, "FireRate") or rawget(v, "cooldown") or rawget(v, "delay") or rawget(v, "BFireRate") or rawget(v, "Speed") or rawget(v, "Velocity") or rawget(v, "BulletSpeed") or rawget(v, "ProjectileSpeed") then
+                    v.FireRate = _G.Xevos_FireRate
+                    v.cooldown = CONFIG.Delay
+                    v.delay = CONFIG.Delay
+                    v.BFireRate = _G.Xevos_FireRate
+
+                    if rawget(v, "Speed") then v.Speed = CONFIG.Speed end
+                    if rawget(v, "Velocity") then v.Velocity = CONFIG.Speed end
+                    if rawget(v, "BulletSpeed") then v.BulletSpeed = CONFIG.Speed end
+                    if rawget(v, "ProjectileSpeed") then v.ProjectileSpeed = CONFIG.Speed end
+                    if rawget(v, "MuzzleVelocity") then v.MuzzleVelocity = CONFIG.Speed end
+                end
+            end
+        end
+    end)
+end
+
+local function scanInventory()
+    locateKnifeRemote()
+    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+    local character = LocalPlayer.Character
+
+    if backpack then
+        for _, tool in ipairs(backpack:GetChildren()) do
+            if tool:IsA("Tool") then applyXevos(tool) end
+        end
+    end
+    if character then
+        for _, tool in ipairs(character:GetChildren()) do
+            if tool:IsA("Tool") then applyXevos(tool) end
+        end
+    end
+    applyGC()
+end
+
+local function handleFastFire(tool)
+    if not _G.Xevos_Enabled or not tool or not tool:IsA("Tool") then return end
+
+    if holdingClick then
+        for _ = 1, _G.Xevos_Burst do
+            pcall(function() tool:Activate() end)
+        end
+
+        if tool.Name:lower():find("knife") or tool.Name:lower():find("dagger") or tool.Name:lower():find("throw") then
+            if knifeRemote and LocalPlayer.Character then
+                local rootPart = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if rootPart then
+                    local currentTime = os.clock()
+                    if currentTime - lastKnifeThrow >= 0.15 then
+                        lastKnifeThrow = currentTime
+                        pcall(function()
+                            for i = 1, 5 do
+                                local randomSpread = Vector3.new(
+                                    math.random(-25, 25) / 100,
+                                    math.random(-10, 10) / 100,
+                                    math.random(-25, 25) / 100
+                                )
+                                local throwDirection = (rootPart.CFrame.LookVector + randomSpread).Unit
+                                knifeRemote:FireServer(rootPart.Position, throwDirection)
+                            end
+                        end)
+                    end
+                end
+            end
+        end
+    end
+end
+
+track(UserInputService.InputBegan:Connect(function(input, processed)
+    if processed then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        holdingClick = true
+    end
+end))
+
+track(UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        holdingClick = false
+    end
+end))
+
+track(RunService.Heartbeat:Connect(function()
+    ensureCapePersistence()
+
+    if not _G.Xevos_Enabled then return end
+
+    local character = LocalPlayer.Character
+    if character then
+        local tool = character:FindFirstChildOfClass("Tool")
+        if tool then
+            applyXevos(tool)
+            handleFastFire(tool)
+        end
+    end
+
+    if os.clock() - lastScan >= CONFIG.ScanInterval then
+        lastScan = os.clock()
+        scanInventory()
+    end
+end))
+
+track(LocalPlayer.CharacterAdded:Connect(function(character)
+    setupCharacterCape(character)
+    if CONFIG.PlaySoundOnRespawn then
+        playIntroSound()
+        showDiscordWatermark()
+    end
+end))
+
+track(LocalPlayer.CharacterRemoving:Connect(function(character)
+    destroyCapeFrom(character)
+    destroyActiveFx()
+end))
+
+playIntroSound()
+showDiscordWatermark()
+
+if LocalPlayer.Character then
+    setupCharacterCape(LocalPlayer.Character)
+    scanInventory()
+end
